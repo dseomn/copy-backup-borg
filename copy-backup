@@ -1,0 +1,146 @@
+#!/bin/sh
+
+log() { printf %s\\n "$*"; }
+error() { log "ERROR: $*" >&2; }
+fatal() { error "$*"; exit 1; }
+try() { "$@" || fatal "Command failed: $*"; }
+
+BASE_DIR="$(try dirname "$0")" || exit 1
+
+
+# Parse configuration.
+CONFIG_FILE="${BASE_DIR}/copy-backup.conf"
+LOCAL_CONFIG_FILE="${BASE_DIR}/copy-backup.local.conf"
+
+. "$CONFIG_FILE" || fatal "Unable to read config file: ${CONFIG_FILE}"
+. "$LOCAL_CONFIG_FILE" ||
+  fatal "Unable to read local config file: ${LOCAL_CONFIG_FILE}"
+
+config_fatal() {
+  fatal "$* [CONFIG_FILE=${CONFIG_FILE} LOCAL_CONFIG_FILE=${LOCAL_CONFIG_FILE}]"
+}
+
+test -n "$BACKUP_COPY_DEV" || config_fatal "BACKUP_COPY_DEV is not set"
+
+test -n "$BACKUP_ORIG_PATH" || config_fatal "BACKUP_ORIG_PATH is not set"
+
+test -n "$BACKUP_ORIG_REPO_PATHS" || {
+  error "BACKUP_ORIG_REPO_PATHS is not set. No repository verification will be"
+  error "performed. Corrupt repositories will not be detected."
+  error
+  error "Sleeping for 60 seconds. Use Ctrl-C to cancel."
+  printf "ERROR: "; for x in $(seq 1 60); do sleep 1; printf .; done; printf \\n
+  error "Continuing without verification."
+}
+
+
+# Exit safely.
+ON_EXIT_UMOUNT_OVERLAY=0
+ON_EXIT_UMOUNT_DEV=0
+ON_EXIT_RM_WORKDIR=0
+on_exit() {
+  ret=
+
+  if test "$ON_EXIT_UMOUNT_OVERLAY" = 1; then
+    try umount "${WORKDIR}/overlay"
+  fi
+
+  if test "$ON_EXIT_UMOUNT_DEV" = 1; then
+    try umount "${WORKDIR}/dev"
+  fi
+
+  if test "$ON_EXIT_RM_WORKDIR" = 1; then
+    (try rmdir "${WORKDIR}/dev") || ret=1
+    (try rmdir "${WORKDIR}/empty") || ret=1
+    (try rm -r "${WORKDIR}/overlay") || ret=1
+    (try rm -r "${WORKDIR}/overlay-upper") || ret=1
+    (try rm -r "${WORKDIR}/overlay-work") || ret=1
+    (try rmdir "${WORKDIR}") || ret=1
+  fi
+
+  test -z "$ret" || exit "$ret"
+}
+trap on_exit EXIT
+
+
+# Setup work environment.
+WORKDIR="$(try mktemp -d)" || exit 1
+try mkdir "${WORKDIR}/dev"  # $BACKUP_COPY_DEV's mountpoint
+try mkdir "${WORKDIR}/empty"
+try mkdir "${WORKDIR}/overlay"
+try mkdir "${WORKDIR}/overlay-upper"
+try mkdir "${WORKDIR}/overlay-work"
+ON_EXIT_RM_WORKDIR=1
+
+
+# Mount, make sure it's safe to continue, then remount for writing.
+try mount -o ro "$BACKUP_COPY_DEV" "${WORKDIR}/dev"
+ON_EXIT_UMOUNT_DEV=1
+test -f "${WORKDIR}/dev/.copy-backup-may-trample-this-directory" || {
+  error "The configured backup copy device (${BACKUP_COPY_DEV}) is not marked"
+  error "for use by ${0}."
+  error
+  error "If you are sure you want ${0} to use this device, please create an"
+  error "empty file named '.copy-backup-may-trample-this-directory' in the root"
+  error "of the device."
+  exit 1
+}
+try mount -o remount,rw "${WORKDIR}/dev"
+
+
+# Pick directories to hard-link from, and to use for speeding up the transfer.
+# The latest successful copy is a good base, if one exists. Additionally, any
+# in-progress directories left over from a previous run of this script are used
+# so that we can (mostly) resume where those previous runs left off.
+LINK_DEST_OPTS=
+for possible_link_dest in \
+    "${WORKDIR}/dev/latest-successful" \
+    "${WORKDIR}"/dev/in-progress.* \
+    ; do
+  test -L "$possible_link_dest" -o -d "$possible_link_dest" &&
+    LINK_DEST_OPTS="${LINK_DEST_OPTS} --link-dest=${possible_link_dest}"
+done
+
+
+# Copy the data.
+START_TIMESTAMP="$(try date --utc "+%Y-%m-%dT%H:%M:%SZ")" || exit 1
+try mkdir "${WORKDIR}/dev/in-progress.${START_TIMESTAMP}"
+try rsync \
+  --archive \
+  --acls \
+  --xattrs \
+  --hard-links \
+  --protect-args \
+  $LINK_DEST_OPTS \
+  $RSYNC_ADDITIONAL_OPTS \
+  "${BACKUP_ORIG_PATH}/" \
+  "${WORKDIR}/dev/in-progress.${START_TIMESTAMP}/"
+END_TIMESTAMP="$(try date --utc "+%Y-%m-%dT%H:%M:%SZ")" || exit 1
+
+
+# Use overlayfs to prevent further changes, then verify the new copy, then
+# allow modification again.
+try mount -o remount,ro "${WORKDIR}/dev"
+try mount -t overlay \
+  -o "lowerdir=${WORKDIR}/dev,upperdir=${WORKDIR}/overlay-upper,workdir=${WORKDIR}/overlay-work" \
+  overlay "${WORKDIR}/overlay"
+ON_EXIT_UMOUNT_OVERLAY=1
+
+for repo in $BACKUP_ORIG_REPO_PATHS; do
+  try borg check --no-files-cache "${WORKDIR}/overlay/in-progress.${START_TIMESTAMP}/${repo}"
+done
+
+ON_EXIT_UMOUNT_OVERLAY=0
+try umount "${WORKDIR}/overlay"
+try mount -o remount,rw "${WORKDIR}/dev"
+
+
+# At this point, the new copy has been verified, so mark it as successful.
+try mv -i "${WORKDIR}/dev/in-progress.${START_TIMESTAMP}" \
+  "${WORKDIR}/dev/backup.${START_TIMESTAMP}.${END_TIMESTAMP}"
+try ln -sf "backup.${START_TIMESTAMP}.${END_TIMESTAMP}" \
+  "${WORKDIR}/dev/latest-successful"
+
+
+# Old in-progress directories are no longer useful, so delete them.
+try rm -rf "${WORKDIR}"/dev/in-progress.*
