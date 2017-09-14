@@ -4,6 +4,7 @@ log() { printf %s\\n "$*"; }
 error() { log "ERROR: $*" >&2; }
 fatal() { error "$*"; exit 1; }
 try() { "$@" || fatal "Command failed: $*"; }
+try_v() { log "Running command: $*"; try "$@"; }
 
 BASE_DIR="$(try dirname "$0")" || exit 1
 
@@ -105,7 +106,7 @@ done
 # Copy the data.
 START_TIMESTAMP="$(try date --utc "+%Y-%m-%dT%H:%M:%SZ")" || exit 1
 try mkdir "${WORKDIR}/dev/in-progress.${START_TIMESTAMP}"
-try rsync \
+try_v rsync \
   --archive \
   --acls \
   --xattrs \
@@ -127,7 +128,7 @@ try mount -t overlay \
 ON_EXIT_UMOUNT_OVERLAY=1
 
 for repo in $BACKUP_ORIG_REPO_PATHS; do
-  try borg check --no-files-cache "${WORKDIR}/overlay/in-progress.${START_TIMESTAMP}/${repo}"
+  try_v borg check --no-files-cache "${WORKDIR}/overlay/in-progress.${START_TIMESTAMP}/${repo}"
 done
 
 ON_EXIT_UMOUNT_OVERLAY=0
