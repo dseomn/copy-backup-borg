@@ -127,8 +127,12 @@ try mount -t overlay \
   overlay "${WORKDIR}/overlay"
 ON_EXIT_UMOUNT_OVERLAY=1
 
+# Work around bug in old borg versions, where repository names can't contain
+# colons.
+ln -s "in-progress.${START_TIMESTAMP}" "${WORKDIR}/overlay/to-check"
+
 for repo in $BACKUP_ORIG_REPO_PATHS; do
-  try_v borg check --no-files-cache "${WORKDIR}/overlay/in-progress.${START_TIMESTAMP}/${repo}"
+  try_v borg check --no-files-cache "${WORKDIR}/overlay/to-check/${repo}"
 done
 
 ON_EXIT_UMOUNT_OVERLAY=0
