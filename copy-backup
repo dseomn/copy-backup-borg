@@ -74,7 +74,7 @@ try mkdir "${WORKDIR}/overlay-work"
 ON_EXIT_RM_WORKDIR=1
 
 
-# Mount, make sure it's safe to continue, then remount for writing.
+# Make sure it's safe to continue, fsck, then mount for writing.
 try mount -o ro "$BACKUP_COPY_DEV" "${WORKDIR}/dev"
 ON_EXIT_UMOUNT_DEV=1
 test -f "${WORKDIR}/dev/.copy-backup-may-trample-this-directory" || {
@@ -86,7 +86,13 @@ test -f "${WORKDIR}/dev/.copy-backup-may-trample-this-directory" || {
   error "of the device."
   exit 1
 }
-try mount -o remount,rw "${WORKDIR}/dev"
+ON_EXIT_UMOUNT_DEV=0
+try umount "${WORKDIR}/dev"
+
+try_v fsck "$BACKUP_COPY_DEV"
+
+try mount -o rw "$BACKUP_COPY_DEV" "${WORKDIR}/dev"
+ON_EXIT_UMOUNT_DEV=1
 
 
 # Pick directories to hard-link from, and to use for speeding up the transfer.
