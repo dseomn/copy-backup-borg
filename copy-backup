@@ -155,7 +155,8 @@ try mount -o remount,rw "${WORKDIR}/dev"
 # At this point, the new copy has been verified, so mark it as successful.
 try mv -i "${WORKDIR}/dev/in-progress.${START_TIMESTAMP}" \
   "${WORKDIR}/dev/backup.${START_TIMESTAMP}.${END_TIMESTAMP}"
-try ln -sf "backup.${START_TIMESTAMP}.${END_TIMESTAMP}" \
+try rm "${WORKDIR}/dev/latest-successful"
+try ln -s "backup.${START_TIMESTAMP}.${END_TIMESTAMP}" \
   "${WORKDIR}/dev/latest-successful"
 
 
