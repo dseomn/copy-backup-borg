@@ -142,9 +142,9 @@ for repo in $BACKUP_ORIG_REPO_PATHS; do
   # Breaking a lock copied from the original repo should be safe, because this
   # is a fresh copy used by only this script. Also, the lock is broken only in
   # the overlay.
-  try borg break-lock --no-files-cache "${WORKDIR}/overlay/to-check/${repo}"
+  try borg break-lock "${WORKDIR}/overlay/to-check/${repo}"
 
-  try_v borg check --no-files-cache "${WORKDIR}/overlay/to-check/${repo}"
+  try_v borg check "${WORKDIR}/overlay/to-check/${repo}"
 done
 
 ON_EXIT_UMOUNT_OVERLAY=0
