@@ -144,7 +144,7 @@ for repo in $BACKUP_ORIG_REPO_PATHS; do
   # the overlay.
   try borg break-lock "${WORKDIR}/overlay/to-check/${repo}"
 
-  try_v borg check --progress "${WORKDIR}/overlay/to-check/${repo}"
+  try_v borg check --verify-data --progress "${WORKDIR}/overlay/to-check/${repo}"
 done
 
 ON_EXIT_UMOUNT_OVERLAY=0
